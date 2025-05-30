@@ -11,6 +11,9 @@ while true; do
      --conf spark.jars.ivy=$JARS_DIR \
      --conf spark.driver.extraJavaOptions="-Dlog4j2.configurationFile=file:/opt/bitnami/spark/conf/log4j2.properties" \
      --conf spark.executor.extraJavaOptions="-Dlog4j2.configurationFile=file:/opt/bitnami/spark/conf/log4j2.properties" \
+     --conf spark.eventLog.enabled=true \
+     --conf spark.eventLog.dir=file:/opt/bitnami/spark/spark-events \
+     --conf spark.io.compression.codec=snappy \
      --jars $JARS_DIR/spark-core_2.12-3.5.5.jar,$JARS_DIR/spark-sql_2.12-3.5.5.jar \
      --class Application \
      /opt/bitnami/spark/app/app.jar
