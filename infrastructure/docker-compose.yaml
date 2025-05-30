@@ -1,0 +1,157 @@
+networks:
+  spark-network:
+
+volumes:
+  spark-events:
+  warehouse:
+
+services:
+
+  # Cluster management
+  spark-master:
+    image: bitnami/spark:3.5.5
+    user: root
+    container_name: spark-master
+    hostname: spark-master
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    environment:
+      SPARK_MODE: master
+      SPARK_PUBLIC_DNS: localhost # This is needed for the Spark UI to be accessible
+    volumes:
+      - spark-events:/opt/bitnami/spark/spark-events
+      - ./../src/main/resources/data.json:/opt/bitnami/spark/data/shared/data.json
+      - ./../src/main/resources/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./../test/spark-master/logs:/opt/bitnami/spark/logs
+    networks:
+      - spark-network
+
+  # Spart executors
+  spark-worker:
+    image: bitnami/spark:3.5.5
+    user: root
+    container_name: spark-worker
+    hostname: spark-worker
+    ports:
+      - "8081:8081"
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_MEMORY: 1G
+      SPARK_PUBLIC_DNS: localhost # This is needed to access the Spark UI from the host machine
+    volumes:
+      - spark-events:/opt/bitnami/spark/spark-events
+      - ./../src/main/resources/data.json:/opt/bitnami/spark/data/shared/data.json
+      - ./../src/main/resources/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./../test/spark-worker/logs:/opt/bitnami/spark/logs
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+
+  # Spark History Server
+  spark-history-server:
+    image: bitnami/spark:3.5.5
+    user: root
+    container_name: spark-history-server
+    hostname: spark-history-server
+    ports:
+      - "18080:18080"
+    environment:
+      SPARK_MASTER_URL: spark://spark-master:7077 # Not strictly necessary, but good practice
+      SPARK_PUBLIC_DNS: localhost
+      SPARK_HISTORY_OPTS: >
+        -Dspark.history.ui.port=18080
+        -Dspark.history.fs.logDirectory=file:///opt/bitnami/spark/spark-events
+        -Dspark.history.retainedApplications=50
+        -Dspark.io.compression.codec=snappy
+    volumes:
+      - spark-events:/opt/bitnami/spark/spark-events
+    depends_on:
+      - spark-master
+    networks:
+      - spark-network
+    entrypoint: ["/bin/bash", "-c", "/opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer"]
+    command: [ ]
+
+  # Spark launcher
+  spark-launcher:
+    image: bitnami/spark:3.5.5
+    user: root
+    container_name: spark-launcher
+    hostname: spark-launcher
+    ports:
+      - "4040:4040"
+    depends_on:
+      - spark-master
+      - spark-worker
+    networks:
+      - spark-network
+    volumes:
+      - spark-events:/opt/bitnami/spark/spark-events
+      - ./exec.sh:/opt/bitnami/spark/app/resources/exec.sh
+      - ./../target/scala-2.12/app.jar:/opt/bitnami/spark/app/app.jar
+      - ./../src/main/resources/data.json:/opt/bitnami/spark/data/shared/data.json
+      - ./../src/main/resources/log4j2.properties:/opt/bitnami/spark/conf/log4j2.properties
+      - ./../test/spark-app/logs:/opt/bitnami/spark/logs
+    entrypoint: [ "/bin/bash", "-c", "/opt/bitnami/spark/app/resources/exec.sh" ]
+    command: [ ]
+
+  # PostgreSQL
+  postgres:
+    image: postgres:14.13
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: metastore_db
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - warehouse:/var/lib/postgresql/data
+    networks:
+      - spark-network
+
+  # Hive Metastore with PostgreSQL
+  hive-metastore-postgres:
+    image: apache/hive:4.0.1
+    container_name: metastore-postgres
+    hostname: metastore-postgres
+    ports:
+      - "9083:9083"
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://postgres:5432/metastore_db
+        -Djavax.jdo.option.ConnectionUserName=hive
+        -Djavax.jdo.option.ConnectionPassword=hive
+    volumes:
+      - warehouse:/opt/hive/data/warehouse
+      - ./postgresql-42.6.2.jar:/opt/hive/lib/postgresql-42.6.2.jar
+    depends_on:
+      - postgres
+    networks:
+      - spark-network
+
+  # Hive UI
+  hive-server:
+    image: apache/hive:4.0.1
+    container_name: hive-server
+    hostname: hive-server
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      - SERVICE_NAME=hiveserver2
+      - SERVICE_OPTS=-Dhive.metastore.uris=thrift://metastore-postgres:9083
+      - IS_RESUME=true
+    depends_on:
+      - hive-metastore-postgres
+    networks:
+      - spark-network
+  
